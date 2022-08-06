@@ -9,8 +9,8 @@ val letterFrequencies = mutableMapOf<Char, AtomicInteger>()
 val wordsByChars = mutableMapOf<Char, MutableSet<String>>()
 
 fun main() {
-    // Load words
-    val words = File("words_alpha.txt").readLines()
+    val words = File("words_alpha.txt")
+        .readLines()                                            // load ALL THE WORDS
         .filter { it.length == 5 && it.toSet().size == 5 }      // only keep words with five distinct letters
         .distinctBy { it.toSortedSet() }                        // remove anagrams
         .toSet()
@@ -18,8 +18,8 @@ fun main() {
     println("Processing ${words.size} unique five letter words...")
 
     // Build a dictionary with lists of all words containing a given letter:
-    //   'a' -> list of all words containing an 'a'
-    //   'b' -> list of all words containing a 'b'
+    //   'a' -> set of all words containing an 'a'
+    //   'b' -> set of all words containing a 'b'
     //   and so on...
     words.forEach { word ->
         word.forEach { char ->

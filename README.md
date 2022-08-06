@@ -21,7 +21,8 @@ non-anagram word set, on an 8-core CPU). It does not use fancy math but a few ra
    helps in efficiently removing invalid word candidates later on.
 
  - The search function works recursively and removes invalid words from the list of candidates for deeper recursion
-   levels. This way the search can terminate early once there are no more word candidates left.
+   levels (using the words-by-letter sets built before). This way the search can terminate early once there are no more
+   word candidates left.
 
  - It does not use Python :wink:
 
