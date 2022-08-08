@@ -6,14 +6,14 @@ import java.util.concurrent.atomic.AtomicInteger
 
 val startTime = System.nanoTime()
 val letterFrequencies = mutableMapOf<Char, AtomicInteger>()
-val wordsByChars = mutableMapOf<Char, MutableSet<String>>()
+val wordsByChars = mutableMapOf<Char, MutableSet<Word>>()
 
 fun main() {
     val words = File("words_alpha.txt")
         .readLines()                                            // load ALL THE WORDS
         .filter { it.length == 5 && it.toSet().size == 5 }      // only keep words with five distinct letters
         .distinctBy { it.toSortedSet() }                        // remove anagrams
-        .toSet()
+        .mapIndexed { i, str -> Word(str, i) }.toSet()
 
     println("Processing ${words.size} unique five letter words...")
 
@@ -22,7 +22,7 @@ fun main() {
     //   'b' -> set of all words containing a 'b'
     //   and so on...
     words.forEach { word ->
-        word.forEach { char ->
+        word.letters.forEach { char ->
             // Add current word to the list for the current letter
             wordsByChars.getOrPut(char) { mutableSetOf() } += word
             // Also count the frequencies of each letter
@@ -50,7 +50,7 @@ fun main() {
  * across all available CPU cores.
  * Result sets are returned as a list of comma-separated strings containing one five-word set per line.
  */
-fun findFiveWordSets(words: Set<String>): Set<String> = runBlocking {
+fun findFiveWordSets(words: Set<Word>): Set<String> = runBlocking {
     // Intelligently select words to begin with:
     // Since valid sets of five words will use 25 letters, there can't be a set which contains neither an 'x' nor a
     // 'q'. By selecting all words containing an 'x' or a 'q' as seeds and then searching for four more words per seed
@@ -61,9 +61,9 @@ fun findFiveWordSets(words: Set<String>): Set<String> = runBlocking {
     // As an additional minor optimization we sort the seed words, so that seeds containing more low frequency letters
     // are tested first. This isn't strictly necessary but helps in better utilizing all CPU cores until the end.
     val seedWords = (wordsByChars['q']!! + wordsByChars['x']!!)
-        .sortedBy { w -> w.sumOf { letterFrequencies[it]!!.get() } }
+        .sortedBy { w -> w.letters.sumOf { letterFrequencies[it]!!.get() } }
 
-    val wordResults = mutableListOf<Deferred<Set<Set<String>>>>()
+    val wordResults = mutableListOf<Deferred<Set<Set<Word>>>>()
     val progressCount = AtomicInteger()
     withContext(Dispatchers.Default) {
         seedWords.forEach { seed ->
@@ -82,7 +82,7 @@ fun findFiveWordSets(words: Set<String>): Set<String> = runBlocking {
     // Collect all coroutine / seed word results and return them as the final result
     wordResults
         .flatMap { deferred -> deferred.await() }
-        .map { setOfFiveWords -> setOfFiveWords.sorted().joinToString { it } }
+        .map { setOfFiveWords -> setOfFiveWords.sorted().joinToString { it.word } }
         .toSortedSet()
 }
 
@@ -91,7 +91,7 @@ fun findFiveWordSets(words: Set<String>): Set<String> = runBlocking {
  * Recursively collect words (not sharing any letters with [addWord]) from the given set of word [candidates]. If we
  * reach a recursion [depth] of 4, we found a valid set five words with only distinct letters and return it.
  */
-fun findWords(candidates: Set<String>, addWord: String, depth: Int): Set<Set<String>> {
+fun findWords(candidates: Set<Word>, addWord: Word, depth: Int): Set<Set<Word>> {
     if (depth == 4) {
         // We reached the maximum recursion depth, i.e. we found a valid five-word set!
         // Return addWord, which will be combined with the other words of the set in the higher recursion levels.
@@ -101,17 +101,19 @@ fun findWords(candidates: Set<String>, addWord: String, depth: Int): Set<Set<Str
         // Filter candidate words: Remove all words containing letters of our current addWord. We can do this
         // relatively fast because of the words-by-character lists we built in the beginning.
         val remainingWords = candidates.toMutableSet()
-        addWord.forEach { remainingWords -= wordsByChars[it]!! }
+        addWord.letters.forEach { remainingWords -= wordsByChars[it]!! }
 
-        val result = mutableSetOf<SortedSet<String>>()
-        remainingWords.forEach { candidate ->
+        val result = mutableSetOf<Set<Word>>()
+        remainingWords.filter { depth == 0 || it.index > addWord.index }.forEach { candidate ->
             // Iterate over remaining candidate words and recursively select additional words not sharing any letters
-            // with the current candidate word
+            // with the current candidate word. If we are deeper than level 0 we can skip words, which have a lower
+            // index than our current addWord, because these combinations where already checked in previous  iterations.
+            // On level 0 this does not work, because we use a reduced set of seed words.
             findWords(remainingWords, candidate, depth + 1).forEach { subSet ->
                 // If we get here, the deeper recursion levels found valid words. Combine them with the current addWord
                 // to a sorted set and add it to the result. We use a sorted set here, so that different combinations
                 // of the same words will result in equal sets and therefore only appear once in the result.
-                result += (subSet + addWord).toSortedSet()
+                result += subSet + addWord
             }
         }
 
@@ -140,4 +142,14 @@ fun printLetterFrequencies() {
         .forEach { (char, freq) ->
             println("$char: $freq")
         }
+}
+
+/**
+ * Wrapper class containing a single word and a few other properties for faster compare operations.
+ */
+class Word(val word: String, val index: Int) : Comparable<Word> {
+    val letters = word.toCharArray()
+    override fun compareTo(other: Word): Int = index.compareTo(other.index)
+    override fun equals(other: Any?): Boolean = this === other
+    override fun hashCode(): Int = index
 }

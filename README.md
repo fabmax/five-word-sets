@@ -10,7 +10,7 @@ used (the original link is here: [https://github.com/dwyl/english-words](https:/
 contains 10175 five-letter words with no duplicate characters, which can be further reduced to 5977 words by removing
 anagrams.
 
-My [solution](src/main/kotlin/FiveLetterWords.kt) solves the problem in **~50 seconds** (based on the 5977
+My [solution](src/main/kotlin/FiveLetterWords.kt) solves the problem in **~25 seconds** (based on the 5977
 non-anagram word set, on an 8-core CPU). It does not use fancy math but a few rather simple tricks:
 
  - Valid five-word sets must use 25 out of 26 characters. Therefore, we can select words containing two rare letters
