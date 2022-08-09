@@ -3,19 +3,24 @@ import java.io.File
 import java.io.FileWriter
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.system.exitProcess
 
 val startTime = System.nanoTime()
-val letterFrequencies = mutableMapOf<Char, AtomicInteger>()
 val wordsByChars = mutableMapOf<Char, MutableSet<Word>>()
 
-fun main() {
-    val words = File("words_alpha.txt")
-        .readLines()                                            // load ALL THE WORDS
-        .filter { it.length == 5 && it.toSet().size == 5 }      // only keep words with five distinct letters
-        .distinctBy { it.toSortedSet() }                        // remove anagrams
-        .mapIndexed { i, str -> Word(str, i) }.toSet()
+fun main(args: Array<String>) {
+    val settings = Settings.fromArgs(args)
+    println("Searching for sets of ${settings.numWords} words, each with ${settings.numLetters} letters...")
 
-    println("Processing ${words.size} unique five letter words...")
+    // Load ALL THE WORDS
+    // Keep words with the desired number of distinct letters
+    val words = File("words_alpha.txt")
+        .readLines()
+        .filter { it.length == settings.numLetters && it.toSet().size == settings.numLetters }
+        .let { list -> if (settings.excludeAnagrams) list.distinctBy { it.toSortedSet() } else list }
+        .mapIndexed { i, str -> Word(str, i) }.toMutableSet()
+
+    println("Processing ${words.size} ${settings.numLetters}-letter ${if (settings.excludeAnagrams) "non-anagram " else "" }words...")
 
     // Build a dictionary with lists of all words containing a given letter:
     //   'a' -> set of all words containing an 'a'
@@ -23,17 +28,14 @@ fun main() {
     //   and so on...
     words.forEach { word ->
         word.letters.forEach { char ->
-            // Add current word to the list for the current letter
             wordsByChars.getOrPut(char) { mutableSetOf() } += word
-            // Also count the frequencies of each letter
-            letterFrequencies.getOrPut(char) { AtomicInteger() }.incrementAndGet()
         }
     }
 
     // Optionally: printLetterFrequencies()
 
     // Do all the work!
-    val fiveWordSets = findFiveWordSets(words)
+    val fiveWordSets = findFiveWordSets(words, settings)
 
     // And we are done
     println(String.format(Locale.ENGLISH, "100.0%%, %5.1f secs", (System.nanoTime() - startTime) / 1e9))
@@ -42,7 +44,7 @@ fun main() {
             writer.write("$it\n")
         }
     }
-    println("Wrote result.txt containing ${fiveWordSets.size} five-word sets")
+    println("Wrote result.txt containing ${fiveWordSets.size} ${settings.numWords}-word sets")
 }
 
 /**
@@ -50,7 +52,7 @@ fun main() {
  * across all available CPU cores.
  * Result sets are returned as a list of comma-separated strings containing one five-word set per line.
  */
-fun findFiveWordSets(words: Set<Word>): Set<String> = runBlocking {
+fun findFiveWordSets(words: Set<Word>, settings: Settings): Set<String> = runBlocking {
     // Intelligently select words to begin with:
     // Since valid sets of five words will use 25 letters, there can't be a set which contains neither an 'x' nor a
     // 'q'. By selecting all words containing an 'x' or a 'q' as seeds and then searching for four more words per seed
@@ -60,8 +62,12 @@ fun findFiveWordSets(words: Set<Word>): Set<String> = runBlocking {
     // a bit.
     // As an additional minor optimization we sort the seed words, so that seeds containing more low frequency letters
     // are tested first. This isn't strictly necessary but helps in better utilizing all CPU cores until the end.
-    val seedWords = (wordsByChars['q']!! + wordsByChars['x']!!)
-        .sortedBy { w -> w.letters.sumOf { letterFrequencies[it]!!.get() } }
+    val neededSeeds = wordsByChars.size - (settings.numWords * settings.numLetters)
+    val seedWords = wordsByChars.map { item -> item.value }
+        .sortedBy { set -> set.size }
+        .subList(0, neededSeeds)
+        .reduceRight { word, acc -> (acc + word).toMutableSet() }
+    println("Using ${seedWords.size} seed words")
 
     val wordResults = mutableListOf<Deferred<Set<Set<Word>>>>()
     val progressCount = AtomicInteger()
@@ -70,7 +76,7 @@ fun findFiveWordSets(words: Set<Word>): Set<String> = runBlocking {
             // Use coroutines to process each word in parallel
             wordResults += async {
                 // Collect all valid sets of five words for the current seed word
-                val result = findWords(words, seed, 0)
+                val result = findWords(words, seed, 0, settings.numWords - 1)
                 // Update progress after we are done with the current word
                 printProgress(progressCount.incrementAndGet(), seedWords.size)
                 // Return result
@@ -91,8 +97,8 @@ fun findFiveWordSets(words: Set<Word>): Set<String> = runBlocking {
  * Recursively collect words (not sharing any letters with [addWord]) from the given set of word [candidates]. If we
  * reach a recursion [depth] of 4, we found a valid set five words with only distinct letters and return it.
  */
-fun findWords(candidates: Set<Word>, addWord: Word, depth: Int): Set<Set<Word>> {
-    if (depth == 4) {
+fun findWords(candidates: Set<Word>, addWord: Word, depth: Int, maxDepth: Int): Set<Set<Word>> {
+    if (depth == maxDepth) {
         // We reached the maximum recursion depth, i.e. we found a valid five-word set!
         // Return addWord, which will be combined with the other words of the set in the higher recursion levels.
         return setOf(setOf(addWord))
@@ -109,7 +115,7 @@ fun findWords(candidates: Set<Word>, addWord: Word, depth: Int): Set<Set<Word>> 
             // with the current candidate word. If we are deeper than level 0 we can skip words, which have a lower
             // index than our current addWord, because these combinations where already checked in previous  iterations.
             // On level 0 this does not work, because we use a reduced set of seed words.
-            findWords(remainingWords, candidate, depth + 1).forEach { subSet ->
+            findWords(remainingWords, candidate, depth + 1, maxDepth).forEach { subSet ->
                 // If we get here, the deeper recursion levels found valid words. Combine them with the current addWord
                 // to a sorted set and add it to the result. We use a sorted set here, so that different combinations
                 // of the same words will result in equal sets and therefore only appear once in the result.
@@ -134,17 +140,6 @@ fun printProgress(progress: Int, size: Int) {
 }
 
 /**
- * Helper function to print the frequencies of all letters in the given collection of words.
- */
-fun printLetterFrequencies() {
-    letterFrequencies.map { it.key to it.value }
-        .sortedBy { (_, freq) -> freq.get() }
-        .forEach { (char, freq) ->
-            println("$char: $freq")
-        }
-}
-
-/**
  * Wrapper class containing a single word and a few other properties for faster compare operations.
  */
 class Word(val word: String, val index: Int) : Comparable<Word> {
@@ -152,4 +147,25 @@ class Word(val word: String, val index: Int) : Comparable<Word> {
     override fun compareTo(other: Word): Int = index.compareTo(other.index)
     override fun equals(other: Any?): Boolean = this === other
     override fun hashCode(): Int = index
+}
+
+data class Settings(val numWords: Int, val numLetters: Int, val excludeAnagrams: Boolean) {
+    companion object {
+        fun fromArgs(args: Array<String>): Settings {
+            try {
+                val nWords = args.find { it == "-nWords" } ?.let { args[args.indexOf(it) + 1].toInt() } ?: 5
+                val nLetters = args.find { it == "-nLetters" } ?.let { args[args.indexOf(it) + 1].toInt() } ?: 5
+                val includeAnagrams = args.find { it == "-includeAnagrams" } ?.let { true } ?: false
+                return Settings(nWords, nLetters, !includeAnagrams)
+
+            } catch (e: Exception) {
+                println("Supported arguments:")
+                println("  -nWords [int]         number of words per set, default: 5")
+                println("  -nLetters [int]       number of words letters per word, default: 5")
+                println("  -includeAnagrams      if specified, anagram words are included in the search")
+                println("Example: ./gradlew run --args=\"-nWords 5 -nLetters 5 -includeAnagrams\"")
+                exitProcess(1)
+            }
+        }
+    }
 }
