@@ -62,7 +62,7 @@ fun findFiveWordSets(words: Set<Word>, settings: Settings): Set<String> = runBlo
     // a bit.
     // As an additional minor optimization we sort the seed words, so that seeds containing more low frequency letters
     // are tested first. This isn't strictly necessary but helps in better utilizing all CPU cores until the end.
-    val neededSeeds = wordsByChars.size - (settings.numWords * settings.numLetters)
+    val neededSeeds = wordsByChars.size - (settings.numWords * settings.numLetters) + 1
     val seedWords = wordsByChars.map { item -> item.value }
         .sortedBy { set -> set.size }
         .subList(0, neededSeeds)
